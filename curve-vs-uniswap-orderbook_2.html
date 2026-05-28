@@ -1,0 +1,895 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Curve vs Uniswap order book</title>
+<style>
+:root {
+  --bg: #fafaf7;
+  --surface: #ffffff;
+  --surface-2: #f1efe8;
+  --text: #2c2c2a;
+  --text-secondary: #5f5e5a;
+  --text-tertiary: #888780;
+  --buy: #1D9E75;
+  --sell: #D85A30;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1a1a18;
+    --surface: #242420;
+    --surface-2: #2c2c28;
+    --text: #f0efe8;
+    --text-secondary: #b4b2a9;
+    --text-tertiary: #888780;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  margin: 0;
+  padding: 2rem;
+  max-width: 1000px;
+  margin: 0 auto;
+}
+h1 { font-size: 22px; font-weight: 500; margin: 0 0 1.5rem; }
+.controls {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 12px;
+  margin-bottom: 1.5rem;
+  padding: 16px;
+  background: var(--surface-2);
+  border-radius: 8px;
+}
+.ctrl-label {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+.ctrl-val { font-size: 13px; font-weight: 500; color: var(--text); font-variant-numeric: tabular-nums; }
+input[type=range] { width: 100%; accent-color: #1D9E75; }
+.section-title { font-size: 15px; color: var(--text-secondary); margin: 0 0 4px; }
+.section-sub { font-size: 13px; color: var(--text-tertiary); margin: 0 0 0.5rem; }
+.chart-wrap { position: relative; width: 100%; height: 360px; margin-bottom: 0.5rem; }
+.stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 1.5rem;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.stat-card {
+  padding: 12px 14px;
+  background: var(--surface-2);
+  border-radius: 8px;
+  border-left: 3px solid transparent;
+}
+.stat-card.buy { border-left-color: var(--buy); }
+.stat-card.sell { border-left-color: var(--sell); }
+.stat-card .head { font-weight: 500; color: var(--text); margin-bottom: 4px; }
+.stat-row { display: flex; justify-content: space-between; padding: 2px 0; }
+.stat-row .k { color: var(--text-secondary); }
+.stat-row .v { color: var(--text); }
+.bp-pos { color: var(--buy); }
+.bp-neg { color: var(--sell); }
+.legend {
+  display: flex; flex-wrap: wrap; gap: 18px;
+  margin-top: 0.75rem; font-size: 13px; color: var(--text-secondary);
+}
+.legend span { display: flex; align-items: center; gap: 8px; }
+.note { font-size: 12px; color: var(--text-tertiary); margin-top: 1rem; line-height: 1.5; }
+.efficiency {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 1.5rem;
+  padding: 14px 16px;
+  background: linear-gradient(135deg, rgba(29,158,117,0.08), rgba(29,158,117,0.02));
+  border: 1px solid rgba(29,158,117,0.2);
+  border-radius: 8px;
+}
+.eff-cell { display: flex; flex-direction: column; gap: 4px; }
+.eff-cell .head {
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.eff-cell .big {
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.eff-cell .big.uni { color: var(--buy); }
+.eff-cell .big.curve { color: var(--sell); }
+.eff-cell .sub { font-size: 12px; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+.eff-warn { color: var(--sell); font-size: 12px; }
+.loading { font-size: 12px; color: var(--text-tertiary); }
+</style>
+</head>
+<body>
+
+<h1>Curve sUSDS/USDT vs Uniswap concentrated liquidity</h1>
+
+<div class="controls">
+  <div>
+    <div class="ctrl-label"><span>Uniswap range (±)</span><span class="ctrl-val" id="uw-val">10 bps</span></div>
+    <input type="range" id="uw" min="1" max="50" step="1" value="10" />
+  </div>
+  <div>
+    <div class="ctrl-label"><span>Uniswap LP size</span><span class="ctrl-val" id="us-val">$50M</span></div>
+    <input type="range" id="us" min="1" max="200" step="1" value="50" />
+  </div>
+  <div>
+    <div class="ctrl-label"><span>Curve TVL (× current)</span><span class="ctrl-val" id="cs-val">1.0×</span></div>
+    <input type="range" id="cs" min="0.1" max="5" step="0.1" value="1" />
+  </div>
+  <div>
+    <div class="ctrl-label"><span>Swap amount</span><span class="ctrl-val" id="sw-val">$1.0M</span></div>
+    <input type="range" id="sw" min="0.1" max="5" step="0.1" value="1" />
+  </div>
+  <div>
+    <div class="ctrl-label"><span>Current price</span><span class="ctrl-val" id="pr-val">0.99997</span></div>
+    <input type="range" id="pr" min="0.998" max="1.002" step="0.00001" value="0.99997" />
+  </div>
+</div>
+
+<div class="efficiency" id="eff-card">
+  <div class="eff-cell">
+    <span class="head">Buy USDT · $<span id="eff-sw-buy">1.0</span>M</span>
+    <span class="big" id="eff-buy">—</span>
+    <span class="sub" id="eff-buy-sub">computing…</span>
+  </div>
+  <div class="eff-cell">
+    <span class="head">Sell USDT · $<span id="eff-sw-sell">1.0</span>M</span>
+    <span class="big" id="eff-sell">—</span>
+    <span class="sub" id="eff-sell-sub">computing…</span>
+  </div>
+</div>
+
+<p class="section-title">Curve sUSDS/USDT · A=20,000 · off-peg mult=20 · fee=0.05 bp</p>
+<p class="section-sub" id="curve-sub">computing…</p>
+<div class="chart-wrap"><canvas id="cChart"></canvas></div>
+<div class="stats" id="curve-stats"></div>
+
+<p class="section-title">Uniswap v4 · adjustable ±bp range · fee=0</p>
+<p class="section-sub" id="uni-sub">computing…</p>
+<div class="chart-wrap"><canvas id="uChart"></canvas></div>
+<div class="stats" id="uni-stats"></div>
+
+<div class="legend">
+  <span><span style="display:inline-block;width:16px;height:3px;background:#1D9E75;"></span>Buy USDT (give USDS)</span>
+  <span><span style="display:inline-block;width:16px;height:0;border-top:2px dashed #D85A30;"></span>Sell USDT (give USDT)</span>
+  <span><span style="display:inline-block;width:8px;height:8px;background:#1D9E75;border-radius:50%;"></span>Swap result · buy</span>
+  <span><span style="display:inline-block;width:8px;height:8px;background:#D85A30;border-radius:50%;"></span>Swap result · sell</span>
+</div>
+
+<p class="section-title" style="margin-top: 2rem;">Historical USDC/USDT price distribution</p>
+<p class="section-sub" id="dist-sub">8,784 hours (~1 year) of 1 bp resolution data · time-weighted avg 0.99997 (-0.26 bp from peg)</p>
+<div class="chart-wrap" style="height: 280px;"><canvas id="distChart"></canvas></div>
+<p class="note">Distribution of where USDC/USDT spot has spent its time over the last year at 1 bp resolution. Peak at 1.0000 (mode), median at 0.9999. Distribution is roughly symmetric around peg but with a slightly heavier right tail (USDT discount). 99.38% of time has been within ±13 bp of peg; only 0.82% has been outside ±13 bp. The current price slider defaults to the time-weighted average (0.99997).</p>
+
+<p class="note">Current price slider sets the pool's starting state (where the spot is right now). For Uniswap the LP range stays anchored at peg ±h bps; for Curve the on-chain balances are virtually rebalanced to the target spot via a virtual swap. Charts and example swap markers update accordingly.</p>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script>
+// ============== Curve constants and math (BigInt) ==============
+const PRECISION = 10n**18n;
+const FEE_PRECISION = 10n**10n;
+const N_COINS_B = 2n;
+const A_NUM = 20000;
+const FEE_B = 50000n;  // 0.05 bp = 50,000 / 1e10
+const OFFPEG_B = 200000000000n;
+
+const BAL_SUSDS_ORIG = 0x29caf371456ed7866ca3bn;
+const BAL_USDT_ORIG = 0x2a560efbe5e3n;
+const RATE_SUSDS = 0x0f3c7907ec91d817n;
+const RATE_USDT = 0xc9f2c9cd04674edea40000000n;
+const SUSDS_TO_USDS = Number(RATE_SUSDS) / 1e18;
+
+function bigAbs(x) { return x < 0n ? -x : x; }
+
+function getD(xp, amp) {
+  let S = 0n;
+  for (const x of xp) S += x;
+  if (S === 0n) return 0n;
+  const Ann = BigInt(amp) * N_COINS_B;
+  let D = S;
+  for (let i = 0; i < 255; i++) {
+    let D_P = D;
+    for (const x of xp) D_P = (D_P * D) / (N_COINS_B * x);
+    const D_prev = D;
+    D = ((Ann * S + D_P * N_COINS_B) * D) / ((Ann - 1n) * D + (N_COINS_B + 1n) * D_P);
+    if (bigAbs(D - D_prev) <= 1n) return D;
+  }
+  return D;
+}
+
+function getY(i, j, x, xp, amp, D) {
+  const Ann = BigInt(amp) * N_COINS_B;
+  let c = D;
+  let S_ = 0n;
+  for (let k = 0; k < 2; k++) {
+    let _x;
+    if (k === i) _x = x;
+    else if (k !== j) _x = xp[k];
+    else continue;
+    S_ += _x;
+    c = (c * D) / (_x * N_COINS_B);
+  }
+  c = (c * D) / (Ann * N_COINS_B);
+  const b = S_ + D / Ann;
+  let y = D;
+  for (let it = 0; it < 255; it++) {
+    const y_prev = y;
+    y = (y * y + c) / (2n * y + b - D);
+    if (bigAbs(y - y_prev) <= 1n) return y;
+  }
+  return y;
+}
+
+function dynFee(xpi, xpj, fee, offpeg) {
+  const s = xpi + xpj;
+  if (s === 0n) return fee;
+  const xps2 = s * s;
+  return (offpeg * fee) / (((offpeg - FEE_PRECISION) * 4n * xpi * xpj) / xps2 + FEE_PRECISION);
+}
+
+// Swap on pool with given balances. Returns { dy_token, new_balances }.
+function curveSwapBal(dxRaw, i, j, balances) {
+  const rates = [RATE_SUSDS, RATE_USDT];
+  const xp = [
+    (balances[0] * rates[0]) / PRECISION,
+    (balances[1] * rates[1]) / PRECISION
+  ];
+  const D = getD(xp, A_NUM);
+  const x_new = xp[i] + (dxRaw * rates[i]) / PRECISION;
+  const y_new = getY(i, j, x_new, xp, A_NUM, D);
+  const dy_xp = xp[j] - y_new - 1n;
+  const fee_dyn = dynFee((xp[i] + x_new) / 2n, (xp[j] + y_new) / 2n, FEE_B, OFFPEG_B);
+  const fee_amount = (dy_xp * fee_dyn) / FEE_PRECISION;
+  const dy_net = dy_xp - fee_amount;
+  const dy_token = (dy_net * PRECISION) / rates[j];
+  return {
+    dy: dy_token,
+    newBalances: [
+      i === 0 ? balances[0] + dxRaw : balances[0] - (j === 0 ? dy_token : 0n),
+      i === 1 ? balances[1] + dxRaw : balances[1] - (j === 1 ? dy_token : 0n)
+    ]
+  };
+}
+
+// Spot price (CEX: USDT per USDS) at given balance state.
+// Uses tiny test swap. Pre-fee; averages buy and sell marginals.
+function curveSpotAt(balances) {
+  // tiny buy: dx = 1 USDS-equivalent via sUSDS
+  const tinyUSDS = 100;
+  const sUSDS_amt = tinyUSDS / SUSDS_TO_USDS;
+  const dx_buy = BigInt(Math.round(sUSDS_amt * 1e18));
+  const r_buy = curveSwapBal(dx_buy, 0, 1, balances);
+  const usdt_out = Number(r_buy.dy) / 1e6;
+  const margBuy = usdt_out / tinyUSDS;
+
+  const tinyUSDT = 100;
+  const dx_sell = BigInt(Math.round(tinyUSDT * 1e6));
+  const r_sell = curveSwapBal(dx_sell, 1, 0, balances);
+  const usds_out = (Number(r_sell.dy) / 1e18) * SUSDS_TO_USDS;
+  const margSell = tinyUSDT / usds_out;
+
+  return { spot: Math.sqrt(margBuy * margSell), spotBuy: margBuy, spotSell: margSell };
+}
+
+// Shift on-chain balances to a target spot via virtual swap (binary search).
+const _shiftCache = new Map();
+function shiftCurveToSpot(targetSpot) {
+  const key = targetSpot.toFixed(7);
+  if (_shiftCache.has(key)) return _shiftCache.get(key);
+
+  let balances = [BAL_SUSDS_ORIG, BAL_USDT_ORIG];
+  const current = curveSpotAt(balances).spot;
+  if (Math.abs(targetSpot - current) < 0.0000001) {
+    _shiftCache.set(key, balances);
+    return balances;
+  }
+
+  const direction = targetSpot > current ? 'sell' : 'buy';
+  let lo = 0;
+  let hi = direction === 'sell' ? 30_000_000 : 200_000_000;
+
+  let best = balances;
+  for (let iter = 0; iter < 40; iter++) {
+    const mid = (lo + hi) / 2;
+    let test;
+    if (direction === 'sell') {
+      const dx = BigInt(Math.round(mid * 1e6));
+      test = curveSwapBal(dx, 1, 0, balances).newBalances;
+    } else {
+      const sAmt = mid / SUSDS_TO_USDS;
+      const dx = BigInt(Math.round(sAmt * 1e18));
+      test = curveSwapBal(dx, 0, 1, balances).newBalances;
+    }
+    const s = curveSpotAt(test).spot;
+    best = test;
+    if ((direction === 'sell' && s > targetSpot) || (direction === 'buy' && s < targetSpot)) {
+      hi = mid;
+    } else {
+      lo = mid;
+    }
+    if (Math.abs(s - targetSpot) < 0.0000001) break;
+  }
+  _shiftCache.set(key, best);
+  return best;
+}
+
+// Build Curve order book from given balance state.
+// Returns { buyCurve: [[marginal, cumUsdtM], ...], sellCurve, maxBuy, maxSell, spotBuy, spotSell }
+function buildCurveCurves(balances, scale) {
+  // Determine remaining pool depth on each side
+  const remainSUSDS = (Number(balances[0]) / 1e18) * SUSDS_TO_USDS;  // in USDS
+  const remainUSDT = Number(balances[1]) / 1e6;
+  const sellMax = remainSUSDS * 0.99;
+  const buyMax = remainUSDT * 0.999;
+
+  // Logarithmic-ish size sweep
+  function gen(maxSize) {
+    const sizes = [];
+    // small range fine, then larger
+    const lvls = [0.001, 0.003, 0.01, 0.03, 0.1, 0.3, 1, 3, 10, 30, 100];
+    for (const v of lvls) {
+      for (let m = 1; m <= 10; m++) {
+        const s = v * m * 1e3;
+        if (s > 0 && s < maxSize) sizes.push(s);
+      }
+    }
+    // Approach the drain
+    for (let frac = 0.5; frac < 0.999; frac += 0.05) sizes.push(maxSize * frac);
+    sizes.push(maxSize * 0.995);
+    sizes.push(maxSize * 0.999);
+    return [...new Set(sizes)].sort((a, b) => a - b);
+  }
+
+  const sellSizes = gen(sellMax);
+  const buySizes = gen(buyMax);
+
+  // Sell USDT: USDT in, USDS out
+  const sellCurve = [];
+  let prevIn = 0, prevOut = 0;
+  for (const s of sellSizes) {
+    const dx = BigInt(Math.round(s * 1e6));
+    if (dx <= 0n) continue;
+    const r = curveSwapBal(dx, 1, 0, balances);
+    const usds_out = (Number(r.dy) / 1e18) * SUSDS_TO_USDS;
+    if (usds_out <= prevOut) continue;
+    const din = s - prevIn, dout = usds_out - prevOut;
+    const marg = din / dout;
+    sellCurve.push([marg, s / 1e6]);
+    prevIn = s; prevOut = usds_out;
+  }
+
+  // Buy USDT: USDS in (via sUSDS), USDT out
+  const buyCurve = [];
+  let prevSpend = 0, prevRecv = 0;
+  for (const s of buySizes) {
+    const sAmt = s / SUSDS_TO_USDS;
+    const dx = BigInt(Math.round(sAmt * 1e18));
+    if (dx <= 0n) continue;
+    const r = curveSwapBal(dx, 0, 1, balances);
+    const usdt_out = Number(r.dy) / 1e6;
+    if (usdt_out <= prevRecv) continue;
+    const din = s - prevSpend, dout = usdt_out - prevRecv;
+    const marg = dout / din;
+    buyCurve.push([marg, usdt_out / 1e6]);
+    prevSpend = s; prevRecv = usdt_out;
+  }
+
+  const spots = curveSpotAt(balances);
+  return {
+    buyCurve: buyCurve.map(([m, y]) => [m, y * scale]),
+    sellCurve: sellCurve.map(([m, y]) => [m, y * scale]),
+    spotBuy: spots.spotBuy,
+    spotSell: spots.spotSell,
+    spot: spots.spot,
+    balUSDS: remainSUSDS * scale,
+    balUSDT: remainUSDT * scale,
+  };
+}
+
+// Curve example swap from shifted state
+function simCurveFromBalances(sizeUsdM, scale, direction, balances) {
+  if (sizeUsdM <= 0) return null;
+  const sizeUsd = sizeUsdM * 1e6;
+  const adjSize = sizeUsd / scale;
+  if (direction === 'sell') {
+    const dx = BigInt(Math.round(adjSize * 1e6));
+    const r = curveSwapBal(dx, 1, 0, balances);
+    const usds_out = (Number(r.dy) / 1e18) * SUSDS_TO_USDS * scale;
+    if (usds_out <= 0) return null;
+    const avg = sizeUsd / usds_out;
+    // Marginal via tiny additional swap
+    const dxEps = BigInt(Math.round((adjSize + 1000) * 1e6));
+    const rEps = curveSwapBal(dxEps, 1, 0, balances);
+    const usds2 = (Number(rEps.dy) / 1e18) * SUSDS_TO_USDS * scale;
+    const marg = (1000 * scale) / (usds2 - usds_out);
+    return { avg, marg, output: usds_out };
+  } else {
+    const sAmt = adjSize / SUSDS_TO_USDS;
+    const dx = BigInt(Math.round(sAmt * 1e18));
+    const r = curveSwapBal(dx, 0, 1, balances);
+    const usdt_out = Number(r.dy) / 1e6 * scale;
+    if (usdt_out <= 0) return null;
+    const avg = usdt_out / sizeUsd;
+    const sAmtEps = (adjSize + 1000) / SUSDS_TO_USDS;
+    const dxEps = BigInt(Math.round(sAmtEps * 1e18));
+    const rEps = curveSwapBal(dxEps, 0, 1, balances);
+    const usdt2 = Number(rEps.dy) / 1e6 * scale;
+    const marg = (usdt2 - usdt_out) / (1000 * scale);
+    return { avg, marg, output: usdt_out };
+  }
+}
+
+// ============== Uniswap math with adjustable current price ==============
+function uniSnapshot(halfBps, lpSizeM, P_c) {
+  const lpSize = lpSizeM * 1e6;
+  const half = halfBps / 10000;
+  const P_a = 1 - half, P_b = 1 + half;
+  const sp_a = Math.sqrt(P_a), sp_b = Math.sqrt(P_b);
+  // LP composition at peg: amt0=L*(1-1/sp_b), amt1=L*(1-sp_a); choose L so total = lpSize at peg.
+  const L = lpSize / ((1 - 1/sp_b) + (1 - sp_a));
+  // Clamp P_c to range for inventory calc; outside-range = single-sided
+  const P_c_clamped = Math.max(P_a, Math.min(P_b, P_c));
+  const sp_c = Math.sqrt(P_c_clamped);
+  const amt_usdc_now = L * (1/sp_c - 1/sp_b);
+  const amt_usdt_now = L * (sp_c - sp_a);
+  // Max swap each direction from current state
+  const maxBuyUSDT = amt_usdt_now;  // can extract all USDT
+  const maxSellUSDC = amt_usdc_now;
+  return { lpSize, L, P_a, P_b, P_c: P_c_clamped, sp_a, sp_b, sp_c,
+           amt_usdc_now, amt_usdt_now, maxBuyUSDT, maxSellUSDC };
+}
+
+function simUni(sizeUsdM, halfBps, lpSizeM, P_c, direction) {
+  if (sizeUsdM <= 0) return null;
+  const u = uniSnapshot(halfBps, lpSizeM, P_c);
+  const sizeUsd = sizeUsdM * 1e6;
+  if (direction === 'buy') {
+    // USDC in, USDT out. From P_c, price goes down toward P_a.
+    let sp_new_inv = 1/u.sp_c + sizeUsd / u.L;
+    const sp_a_inv = 1/u.sp_a;
+    let clipped = false;
+    if (sp_new_inv > sp_a_inv) { sp_new_inv = sp_a_inv; clipped = true; }
+    const sp_new = 1 / sp_new_inv;
+    const dyOut = u.L * (u.sp_c - sp_new);
+    const dxIn = u.L * (sp_new_inv - 1/u.sp_c);
+    const avg = dyOut / dxIn;
+    const marg = sp_new * sp_new;
+    return { avg, marg, output: dyOut, clipped, dxUsed: dxIn };
+  } else {
+    let sp_new = u.sp_c + sizeUsd / u.L;
+    let clipped = false;
+    if (sp_new > u.sp_b) { sp_new = u.sp_b; clipped = true; }
+    const dyIn = u.L * (sp_new - u.sp_c);
+    const dxOut = u.L * (1/u.sp_c - 1/sp_new);
+    const avg = dyIn / dxOut;
+    const marg = sp_new * sp_new;
+    return { avg, marg, output: dxOut, clipped, dxUsed: dyIn };
+  }
+}
+
+function buildUniCurves(halfBps, lpSizeM, P_c) {
+  const u = uniSnapshot(halfBps, lpSizeM, P_c);
+  const N = 60;
+  const buy = [{ x: u.P_c, y: 0 }];
+  const sell = [{ x: u.P_c, y: 0 }];
+  for (let i = 1; i <= N; i++) {
+    const frac = i / N;
+    // Buy: marginal drops from P_c to P_a
+    const sp_b_new = u.sp_c + frac * (u.sp_a - u.sp_c);
+    const P_new_b = sp_b_new * sp_b_new;
+    const dy_b = u.L * (u.sp_c - sp_b_new);
+    buy.push({ x: P_new_b, y: dy_b / 1e6 });
+    // Sell: marginal rises from P_c to P_b
+    const sp_s_new = u.sp_c + frac * (u.sp_b - u.sp_c);
+    const P_new_s = sp_s_new * sp_s_new;
+    const dy_s = u.L * (sp_s_new - u.sp_c);
+    sell.push({ x: P_new_s, y: dy_s / 1e6 });
+  }
+  // Tails to chart edge: flat at max depth
+  const chartHalf = 55 / 10000;
+  if (u.P_a > 1 - chartHalf) buy.push({ x: 1 - chartHalf, y: u.maxBuyUSDT / 1e6 });
+  if (u.P_b < 1 + chartHalf) sell.push({ x: 1 + chartHalf, y: u.maxSellUSDC / 1e6 });
+  return { buy, sell, maxBuy: u.maxBuyUSDT / 1e6, maxSell: u.maxSellUSDC / 1e6 };
+}
+
+// ============== Chart wiring ==============
+const COL_SELL = '#D85A30', COL_SELL_FILL = 'rgba(216,90,48,0.18)';
+const COL_BUY = '#1D9E75', COL_BUY_FILL = 'rgba(29,158,117,0.18)';
+const UNI_CHART_HALF_BPS = 55;
+const CURVE_CHART_HALF_BPS = 200;
+
+function fp(v) {
+  const b = (v - 1) * 10000;
+  if (Math.abs(b) >= 100) return b.toFixed(0) + ' bp';
+  if (Math.abs(b) >= 10) return b.toFixed(1) + ' bp';
+  return b.toFixed(2) + ' bp';
+}
+function fd(v) {
+  if (v >= 1) return '$' + v.toFixed(0) + 'M';
+  if (v >= 0.01) return '$' + (v * 1000).toFixed(0) + 'k';
+  return '$' + Math.round(v * 1000000).toLocaleString();
+}
+function fdShort(v) {
+  if (v >= 1) return '$' + v.toFixed(2) + 'M';
+  if (v >= 0.01) return '$' + (v * 1000).toFixed(1) + 'k';
+  return '$' + Math.round(v * 1000000).toLocaleString();
+}
+function fmtBpDir(bp, side, kind) {
+  let favorable;
+  if (kind === 'fromPeg') favorable = (side === 'buy') ? (bp > 0) : (bp < 0);
+  else favorable = bp <= 0;
+  const cls = favorable ? 'bp-pos' : 'bp-neg';
+  const sign = bp >= 0 ? '+' : '';
+  return '<span class="' + cls + '">' + sign + bp.toFixed(2) + ' bp</span>';
+}
+
+const refLinesPlugin = {
+  id: 'rl',
+  afterDatasetsDraw(ch) {
+    const { ctx, chartArea, scales } = ch;
+    const refs = ch.options.plugins.refLines || [];
+    refs.forEach(ln => {
+      const x = scales.x.getPixelForValue(ln.x);
+      if (x < chartArea.left || x > chartArea.right) return;
+      ctx.save();
+      ctx.strokeStyle = ln.color || '#888780';
+      ctx.lineWidth = 1;
+      ctx.setLineDash(ln.dash || [3, 3]);
+      ctx.beginPath();
+      ctx.moveTo(x, chartArea.top);
+      ctx.lineTo(x, chartArea.bottom);
+      ctx.stroke();
+      if (ln.label) {
+        ctx.fillStyle = ln.color || '#5F5E5A';
+        ctx.font = '11px sans-serif';
+        ctx.fillText(ln.label, x + 4, chartArea.top + 14);
+      }
+      ctx.restore();
+    });
+  }
+};
+
+function makeChart(canvasId) {
+  return new Chart(document.getElementById(canvasId), {
+    type: 'scatter',
+    data: {
+      datasets: [
+        { label: 'Buy USDT', data: [], showLine: true, fill: 'origin',
+          backgroundColor: COL_BUY_FILL, borderColor: COL_BUY, borderWidth: 1.5, pointRadius: 0 },
+        { label: 'Sell USDT', data: [], showLine: true, fill: 'origin',
+          backgroundColor: COL_SELL_FILL, borderColor: COL_SELL, borderWidth: 1.5, borderDash: [4, 3], pointRadius: 0 },
+        { label: 'Swap · buy', data: [], showLine: false, pointRadius: 6, pointHoverRadius: 8,
+          backgroundColor: COL_BUY, borderColor: '#fff', borderWidth: 2 },
+        { label: 'Swap · sell', data: [], showLine: false, pointRadius: 6, pointHoverRadius: 8,
+          backgroundColor: COL_SELL, borderColor: '#fff', borderWidth: 2 }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      interaction: { mode: 'nearest', axis: 'x', intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: c => c.dataset.label + ': ' + fdShort(c.raw.y) + ' at ' + ((c.raw.x - 1) * 10000).toFixed(2) + ' bp',
+            title: i => i.length ? 'USDS/USDT = ' + i[0].raw.x.toFixed(7) : ''
+          }
+        },
+        refLines: []
+      },
+      scales: {
+        x: { type: 'linear', title: { display: true, text: 'Marginal price (bp from peg)' },
+             ticks: { callback: fp, maxRotation: 0 } },
+        y: { beginAtZero: true, title: { display: true, text: 'Cumulative USDT volume' },
+             ticks: { callback: fd } }
+      }
+    },
+    plugins: [refLinesPlugin]
+  });
+}
+
+const cChart = makeChart('cChart');
+const uChart = makeChart('uChart');
+
+function renderStats(elId, currentSpot, buyRes, sellRes, swapSizeM) {
+  const el = document.getElementById(elId);
+  let html = '';
+  const spotBuy = (typeof currentSpot === 'object') ? currentSpot.buy : currentSpot;
+  const spotSell = (typeof currentSpot === 'object') ? currentSpot.sell : currentSpot;
+  if (buyRes && buyRes.output > 0) {
+    const avgBp = (buyRes.avg - 1) * 10000;
+    const margBp = (buyRes.marg - 1) * 10000;
+    const slip = -(buyRes.avg - spotBuy) * 10000;
+    const clipped = buyRes.clipped ? ' <span class="bp-neg">(clipped — exceeds depth)</span>' : '';
+    html += '<div class="stat-card buy"><div class="head">Buy USDT · spend $' + swapSizeM.toFixed(2) + 'M USDS' + clipped + '</div>';
+    html += '<div class="stat-row"><span class="k">Avg rate</span><span class="v">' + buyRes.avg.toFixed(7) + ' (' + fmtBpDir(avgBp, 'buy', 'fromPeg') + ' vs peg)</span></div>';
+    html += '<div class="stat-row"><span class="k">Marginal end</span><span class="v">' + buyRes.marg.toFixed(7) + ' (' + fmtBpDir(margBp, 'buy', 'fromPeg') + ')</span></div>';
+    html += '<div class="stat-row"><span class="k">USDT received</span><span class="v">$' + Math.round(buyRes.output).toLocaleString() + '</span></div>';
+    html += '<div class="stat-row"><span class="k">Slippage vs spot</span><span class="v">' + fmtBpDir(slip, 'buy', 'slip') + '</span></div>';
+    html += '</div>';
+  } else {
+    html += '<div class="stat-card buy"><div class="head">Buy USDT</div><div class="stat-row"><span class="k">No depth available</span></div></div>';
+  }
+  if (sellRes && sellRes.output > 0) {
+    const avgBp = (sellRes.avg - 1) * 10000;
+    const margBp = (sellRes.marg - 1) * 10000;
+    const slip = (sellRes.avg - spotSell) * 10000;
+    const clipped = sellRes.clipped ? ' <span class="bp-neg">(clipped — exceeds depth)</span>' : '';
+    html += '<div class="stat-card sell"><div class="head">Sell USDT · give $' + swapSizeM.toFixed(2) + 'M USDT' + clipped + '</div>';
+    html += '<div class="stat-row"><span class="k">Avg rate</span><span class="v">' + sellRes.avg.toFixed(7) + ' (' + fmtBpDir(avgBp, 'sell', 'fromPeg') + ' vs peg)</span></div>';
+    html += '<div class="stat-row"><span class="k">Marginal end</span><span class="v">' + sellRes.marg.toFixed(7) + ' (' + fmtBpDir(margBp, 'sell', 'fromPeg') + ')</span></div>';
+    html += '<div class="stat-row"><span class="k">USDS received</span><span class="v">$' + Math.round(sellRes.output).toLocaleString() + '</span></div>';
+    html += '<div class="stat-row"><span class="k">Slippage vs spot</span><span class="v">' + fmtBpDir(slip, 'sell', 'slip') + '</span></div>';
+    html += '</div>';
+  } else {
+    html += '<div class="stat-card sell"><div class="head">Sell USDT</div><div class="stat-row"><span class="k">No depth available</span></div></div>';
+  }
+  el.innerHTML = html;
+}
+
+let curveBalCache = null;
+let curveBalKey = null;
+
+function updateAll() {
+  const s = {
+    uw: parseInt(document.getElementById('uw').value),
+    us: parseInt(document.getElementById('us').value),
+    cs: parseFloat(document.getElementById('cs').value),
+    sw: parseFloat(document.getElementById('sw').value),
+    pr: parseFloat(document.getElementById('pr').value),
+  };
+
+  // Curve: shift balances to target spot (cached by price), then build curves
+  const balKey = s.pr.toFixed(5);
+  if (balKey !== curveBalKey) {
+    curveBalCache = shiftCurveToSpot(s.pr);
+    curveBalKey = balKey;
+  }
+  const balances = curveBalCache;
+  const curve = buildCurveCurves(balances, s.cs);
+
+  cChart.data.datasets[0].data = curve.buyCurve.map(([x, y]) => ({ x, y }));
+  cChart.data.datasets[1].data = curve.sellCurve.map(([x, y]) => ({ x, y }));
+  const curveBuyRes = simCurveFromBalances(s.sw, s.cs, 'buy', balances);
+  const curveSellRes = simCurveFromBalances(s.sw, s.cs, 'sell', balances);
+  cChart.data.datasets[2].data = (curveBuyRes && curveBuyRes.output > 0) ? [{ x: curveBuyRes.marg, y: curveBuyRes.output / 1e6 }] : [];
+  cChart.data.datasets[3].data = (curveSellRes && curveSellRes.output > 0) ? [{ x: curveSellRes.marg, y: s.sw }] : [];
+  cChart.options.scales.x.min = 1 - CURVE_CHART_HALF_BPS / 10000;
+  cChart.options.scales.x.max = 1 + CURVE_CHART_HALF_BPS / 10000;
+  // Y max: fit cumulative depth visible within the +/-200 bp x-axis window
+  const xMinC = 1 - CURVE_CHART_HALF_BPS / 10000;
+  const xMaxC = 1 + CURVE_CHART_HALF_BPS / 10000;
+  let visibleMaxY = 0;
+  for (const [x, y] of curve.buyCurve) {
+    if (x >= xMinC && x <= xMaxC && y > visibleMaxY) visibleMaxY = y;
+  }
+  for (const [x, y] of curve.sellCurve) {
+    if (x >= xMinC && x <= xMaxC && y > visibleMaxY) visibleMaxY = y;
+  }
+  const curveMaxY = Math.max(2, visibleMaxY * 1.1);
+  cChart.options.scales.y.max = curveMaxY;
+  cChart.options.plugins.refLines = [
+    { x: 1.0, color: '#888780', dash: [4, 4], label: 'peg' },
+    { x: curve.spotBuy, color: COL_BUY, dash: [2, 2], label: 'spot (buy)' },
+    { x: curve.spotSell, color: COL_SELL, dash: [2, 2], label: 'spot (sell)' }
+  ];
+  cChart.update('none');
+
+  document.getElementById('curve-sub').textContent =
+    Math.round(curve.balUSDS).toLocaleString() + ' USDS + ' +
+    Math.round(curve.balUSDT).toLocaleString() + ' USDT · spot ' + curve.spot.toFixed(6) +
+    ' · max sell ' + fd(curve.balUSDS / 1e6) + ' / max buy ' + fd(curve.balUSDT / 1e6);
+  renderStats('curve-stats', { buy: curve.spotBuy, sell: curve.spotSell }, curveBuyRes, curveSellRes, s.sw);
+
+  // Uniswap with adjustable P_c
+  const u = buildUniCurves(s.uw, s.us, s.pr);
+  uChart.data.datasets[0].data = u.buy;
+  uChart.data.datasets[1].data = u.sell;
+  const uniBuyRes = simUni(s.sw, s.uw, s.us, s.pr, 'buy');
+  const uniSellRes = simUni(s.sw, s.uw, s.us, s.pr, 'sell');
+  uChart.data.datasets[2].data = (uniBuyRes && uniBuyRes.output > 0) ? [{ x: uniBuyRes.marg, y: uniBuyRes.output / 1e6 }] : [];
+  uChart.data.datasets[3].data = (uniSellRes && uniSellRes.output > 0) ? [{ x: uniSellRes.marg, y: uniSellRes.dxUsed / 1e6 }] : [];
+  uChart.options.scales.x.min = 1 - UNI_CHART_HALF_BPS / 10000;
+  uChart.options.scales.x.max = 1 + UNI_CHART_HALF_BPS / 10000;
+  uChart.options.scales.y.max = Math.max(u.maxBuy, u.maxSell) * 1.15;
+  uChart.options.plugins.refLines = [
+    { x: 1.0, color: '#888780', dash: [4, 4], label: 'peg' },
+    { x: s.pr, color: '#5f5e5a', dash: [2, 2], label: 'spot' },
+    { x: 1 - s.uw/10000, color: '#999', dash: [1, 4], label: '-' + s.uw + ' bp' },
+    { x: 1 + s.uw/10000, color: '#999', dash: [1, 4], label: '+' + s.uw + ' bp' }
+  ];
+  uChart.update('none');
+  document.getElementById('uni-sub').textContent =
+    'spot ' + s.pr.toFixed(5) + ' · range ±' + s.uw + ' bp · LP $' + s.us + 'M · max buy ' +
+    fd(u.maxBuy) + ' / max sell ' + fd(u.maxSell);
+  renderStats('uni-stats', s.pr, uniBuyRes, uniSellRes, s.sw);
+
+  // ====== Dynamic efficiency comparison ======
+  document.getElementById('eff-sw-buy').textContent = s.sw.toFixed(2);
+  document.getElementById('eff-sw-sell').textContent = s.sw.toFixed(2);
+
+  function efficiencyHtml(uniRes, curveRes, side) {
+    // Cost = unfavorable slippage in bp (positive number)
+    // For buy: cost = spot - avg (less USDT than spot would give)
+    // For sell: cost = avg - spot (more USDT given than spot would take)
+    if (!uniRes || uniRes.output <= 0) {
+      return { big: 'Uniswap out of range', cls: 'curve', sub: 'Uniswap LP cannot quote at this price' };
+    }
+    if (!curveRes || curveRes.output <= 0) {
+      return { big: 'Curve out of depth', cls: 'uni', sub: 'Curve pool cannot fill this swap' };
+    }
+    let uniCost, curveCost;
+    if (side === 'buy') {
+      uniCost = (s.pr - uniRes.avg) * 10000;
+      curveCost = (s.pr - curveRes.avg) * 10000;
+    } else {
+      uniCost = (uniRes.avg - s.pr) * 10000;
+      curveCost = (curveRes.avg - s.pr) * 10000;
+    }
+    // If costs are within rounding of zero, present as parity
+    if (Math.abs(uniCost) < 0.001 && Math.abs(curveCost) < 0.001) {
+      return { big: '~parity', cls: '', sub: 'Both ~ 0 bp slippage at this size' };
+    }
+    // If one side is favorable (negative cost), it ate the bid-ask in its favor — still report
+    const uniBp = uniCost.toFixed(2) + ' bp';
+    const curveBp = curveCost.toFixed(2) + ' bp';
+    if (uniCost <= 0 && curveCost > 0) {
+      return { big: 'Uniswap favorable', cls: 'uni', sub: 'Uniswap ' + uniBp + ' (gain) · Curve ' + curveBp };
+    }
+    if (curveCost <= 0 && uniCost > 0) {
+      return { big: 'Curve favorable', cls: 'curve', sub: 'Curve ' + curveBp + ' (gain) · Uniswap ' + uniBp };
+    }
+    if (uniCost > 0 && curveCost > 0) {
+      const ratio = curveCost / uniCost;
+      if (ratio >= 1) {
+        return { big: ratio.toFixed(1) + '× tighter on Uniswap', cls: 'uni',
+                 sub: 'Uniswap ' + uniBp + ' · Curve ' + curveBp };
+      } else {
+        return { big: (1/ratio).toFixed(1) + '× tighter on Curve', cls: 'curve',
+                 sub: 'Curve ' + curveBp + ' · Uniswap ' + uniBp };
+      }
+    }
+    // Both negative (both favorable, unusual)
+    const absRatio = Math.abs(curveCost) / Math.abs(uniCost);
+    return { big: absRatio.toFixed(1) + '× more favorable on ' + (Math.abs(curveCost) > Math.abs(uniCost) ? 'Curve' : 'Uniswap'),
+             cls: '', sub: 'Uniswap ' + uniBp + ' · Curve ' + curveBp };
+  }
+
+  // Add clipped warning to sub-text if applicable
+  function withClipNote(html, uniRes) {
+    if (uniRes && uniRes.clipped) {
+      return { ...html, sub: html.sub + ' <span class="eff-warn">(Uniswap clipped to LP edge)</span>' };
+    }
+    return html;
+  }
+
+  const buyEff = withClipNote(efficiencyHtml(uniBuyRes, curveBuyRes, 'buy'), uniBuyRes);
+  const sellEff = withClipNote(efficiencyHtml(uniSellRes, curveSellRes, 'sell'), uniSellRes);
+  const bigBuy = document.getElementById('eff-buy');
+  const bigSell = document.getElementById('eff-sell');
+  bigBuy.textContent = buyEff.big;
+  bigBuy.className = 'big ' + buyEff.cls;
+  document.getElementById('eff-buy-sub').innerHTML = buyEff.sub;
+  bigSell.textContent = sellEff.big;
+  bigSell.className = 'big ' + sellEff.cls;
+  document.getElementById('eff-sell-sub').innerHTML = sellEff.sub;
+}
+
+// Throttle updates with rAF
+let pending = false;
+function scheduleUpdate() {
+  if (pending) return;
+  pending = true;
+  requestAnimationFrame(() => { pending = false; updateAll(); });
+}
+
+document.getElementById('uw').addEventListener('input', e => {
+  document.getElementById('uw-val').textContent = e.target.value + ' bps';
+  scheduleUpdate();
+});
+document.getElementById('us').addEventListener('input', e => {
+  document.getElementById('us-val').textContent = '$' + e.target.value + 'M';
+  scheduleUpdate();
+});
+document.getElementById('cs').addEventListener('input', e => {
+  document.getElementById('cs-val').textContent = parseFloat(e.target.value).toFixed(1) + '×';
+  scheduleUpdate();
+});
+document.getElementById('sw').addEventListener('input', e => {
+  document.getElementById('sw-val').textContent = '$' + parseFloat(e.target.value).toFixed(1) + 'M';
+  scheduleUpdate();
+});
+document.getElementById('pr').addEventListener('input', e => {
+  document.getElementById('pr-val').textContent = parseFloat(e.target.value).toFixed(5);
+  scheduleUpdate();
+});
+
+updateAll();
+
+// ============== Historical price distribution histogram ==============
+// 1-year, 8,784 hours. Lower/upper tails consolidated; labels reflect bucket boundaries.
+const DISTRIBUTION = [
+  [0.9988, 18, 0.20, '≤ -11 bp'],
+  [0.9990, 25, 0.28, '-10 bp'],   [0.9991, 69, 0.79, '-9 bp'],
+  [0.9992, 163, 1.86, '-8 bp'],   [0.9993, 258, 2.94, '-7 bp'],
+  [0.9994, 468, 5.33, '-6 bp'],   [0.9995, 682, 7.76, '-5 bp'],
+  [0.9996, 735, 8.37, '-4 bp'],   [0.9997, 763, 8.69, '-3 bp'],
+  [0.9998, 819, 9.32, '-2 bp'],   [0.9999, 771, 8.78, '-1 bp'],
+  [1.0000, 823, 9.37, '0'],       [1.0001, 516, 5.87, '+1 bp'],
+  [1.0002, 493, 5.61, '+2 bp'],   [1.0003, 403, 4.59, '+3 bp'],
+  [1.0004, 342, 3.89, '+4 bp'],   [1.0005, 323, 3.68, '+5 bp'],
+  [1.0006, 195, 2.22, '+6 bp'],   [1.0007, 178, 2.03, '+7 bp'],
+  [1.0008, 143, 1.63, '+8 bp'],   [1.0009, 158, 1.80, '+9 bp'],
+  [1.0010, 140, 1.59, '+10 bp'],  [1.0011, 114, 1.30, '+11 bp'],
+  [1.0012, 84, 0.96, '+12 bp'],   [1.0013, 45, 0.51, '+13 bp'],
+  [1.0015, 56, 0.62, '≥ +14 bp'],
+];
+const DIST_AVG = 0.99997;
+
+const distCtx = document.getElementById('distChart');
+new Chart(distCtx, {
+  type: 'bar',
+  data: {
+    labels: DISTRIBUTION.map(([_, __, ___, label]) => label),
+    datasets: [{
+      label: '% of time',
+      data: DISTRIBUTION.map(([_, __, pct]) => pct),
+      backgroundColor: DISTRIBUTION.map(([p]) => {
+        // Color: red for USDT premium (below peg), green for USDT discount (above peg)
+        if (p < 1.0) return 'rgba(216,90,48,0.65)';
+        if (p > 1.0) return 'rgba(29,158,117,0.65)';
+        return 'rgba(136,135,128,0.65)';
+      }),
+      borderColor: DISTRIBUTION.map(([p]) => {
+        if (p < 1.0) return '#D85A30';
+        if (p > 1.0) return '#1D9E75';
+        return '#888780';
+      }),
+      borderWidth: 1
+    }]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: false,
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        callbacks: {
+          title: i => i.length ? 'Price ' + DISTRIBUTION[i[0].dataIndex][0].toFixed(4) : '',
+          label: c => c.parsed.y.toFixed(2) + '% of time · ' + DISTRIBUTION[c.dataIndex][1].toLocaleString() + ' hours'
+        }
+      },
+    },
+    scales: {
+      x: {
+        title: { display: true, text: 'Price (bp from peg)' },
+        ticks: { autoSkip: false, maxRotation: 0, font: { size: 10 } }
+      },
+      y: {
+        beginAtZero: true,
+        title: { display: true, text: '% of time' },
+        ticks: { callback: v => v.toFixed(0) + '%' }
+      }
+    }
+  },
+});
+</script>
+</body>
+</html>
